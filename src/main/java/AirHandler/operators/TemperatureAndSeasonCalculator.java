@@ -1,66 +1,82 @@
 package AirHandler.operators;
 
 import AirHandler.enums.AirHandlerMode;
-import AirHandler.models.CubeItem;
+import AirHandler.models.AirHandlerCubeItem;
 import AirHandler.models.ResultItem;
-import scala.Int;
+import AirHandler.models.outputs.StrategyAbnormalRecord;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.util.Collector;
 
 import java.util.*;
 
-public class TemperatureAndSeasonCalculator {
-    private static List<Integer> Summer = new ArrayList<>(Arrays.asList(5, 6, 7, 8, 9, 10));
-    private static List<Integer> Winter = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 11, 12));
-    private static double SummerTem = 26;
-    private static double WinterTem = 20;
+public class TemperatureAndSeasonCalculator implements FlatMapFunction<AirHandlerCubeItem, StrategyAbnormalRecord> {
+    List<Integer> Summer;
+    List<Integer> Winter;
+    double SummerTem = 26;
+    double WinterTem = 20;
+    String OperatorName;
+    HashMap<String, StrategyAbnormalRecord> unfinishedRecords;
 
-    public static ResultItem Calculate(CubeItem item) {
-        ResultItem result = new ResultItem();
-        result.SetName(item.DeviceKey);
-        result.SetMode(item.Mode);
-        result.SetTemperature(item.Temperature);
-        result.SetTemperatureSet(item.TemperatureSet);
-        result.SetStatus(item.Status);
-        result.SetTimeStamp(item.TimeStamp);
-        result.SetIsWarning(CalculateWarning(item));
-
-        return result;
+    public TemperatureAndSeasonCalculator(List<Integer> summer, List<Integer> winter, double summerTem, double winterTem, String operatorName) {
+        this.Summer = summer;
+        this.Winter = winter;
+        this.SummerTem = summerTem;
+        this.WinterTem = winterTem;
+        this.OperatorName = operatorName;
     }
 
-    private static boolean CalculateWarning(CubeItem item) {
+    @Override
+    public void flatMap(AirHandlerCubeItem item, Collector<StrategyAbnormalRecord> collector) throws Exception {
+        if (unfinishedRecords == null) {
+            unfinishedRecords = new HashMap<>();
+        }
+        //尚未结束的事件
+        boolean waitClose = unfinishedRecords.containsKey(item.DeviceKey);
+        //该数据是否需要报警
+        double measureTem = SummerTem;
+        boolean warning = false;
+        //关闭状态下，无需报警
         if (item.Status) {
             Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"));
             calendar.setTimeInMillis(item.TimeStamp);
             int month = calendar.get(Calendar.MONTH) + 1;
-
             //夏天
             if (Summer.stream().anyMatch(x -> x == month)) {
                 if (item.TemperatureSet < SummerTem && item.Mode.equals(AirHandlerMode.制冷.toString())) {
-                    return true;
-                } else {
-                    return false;
+                    warning = true;
+                    measureTem = SummerTem;
                 }
             }
             //冬天
             else {
                 if (item.TemperatureSet > WinterTem && item.Mode.equals(AirHandlerMode.制热.toString())) {
-                    return true;
-                } else {
-                    return false;
+                    warning = true;
+                    measureTem = WinterTem;
                 }
             }
-        } else {
-            return false;
         }
-    }
 
-    public static void SetSeason(List<Integer> summer, List<Integer> winter) {
-        Summer = summer;
-        Winter = winter;
-    }
-
-    public static void SetTemperature(double summerTem, double winterTem) {
-        SummerTem = summerTem;
-        WinterTem = winterTem;
+        if (warning && (!waitClose)) {
+            StrategyAbnormalRecord record = new StrategyAbnormalRecord(
+                    item.TimeStamp,
+                    "温度设定异常",
+                    "暖通系统",
+                    item.DeviceKey,
+                    this.OperatorName,
+                    ""
+            );
+            record.SetMeasure("调整到" + measureTem + "℃");
+            record.SetOriginData(item.toJSONObject());
+            unfinishedRecords.put(item.DeviceKey, record);
+            collector.collect(record);
+        }
+        if (waitClose && (!warning)) {
+            StrategyAbnormalRecord record = unfinishedRecords.get(item.DeviceKey);
+            record.SetFinish(item.TimeStamp);
+            record.SetCarbon(0, "kg");
+            collector.collect(record);
+            unfinishedRecords.remove(item.DeviceKey);
+        }
     }
 
 }

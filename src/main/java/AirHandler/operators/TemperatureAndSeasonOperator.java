@@ -1,21 +1,13 @@
 package AirHandler.operators;
 
-import AirHandler.Functions.CubeItemFilterInvalidFunction;
-import AirHandler.Functions.SourceFunction;
-import AirHandler.models.CubeItem;
+import AirHandler.Functions.Redises.AirHandlerSourceRedisMapFunction;
+import AirHandler.Functions.Redises.RedisSourceFunction;
+import AirHandler.Functions.sink.RedisSinkFunction;
+import AirHandler.Functions.sink.TableSinkFunction;
+import AirHandler.models.AirHandlerCubeItem;
 import AirHandler.models.ExternalTask;
-import AirHandler.models.ResultItem;
-import AirHandler.utils.PostMessage;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-import com.alibaba.fastjson.serializer.SerializerFeature;
-import org.apache.flink.api.common.functions.MapFunction;
+import AirHandler.models.outputs.StrategyAbnormalRecord;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.serialization.SimpleStringSchema;
-import org.apache.flink.connector.base.DeliveryGuarantee;
-import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
-import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
@@ -23,16 +15,41 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
 
 public class TemperatureAndSeasonOperator {
-    private static String kafkaServer;
-    private static String sourceTopic;
-    private static String sourceGroup;
-    private static String sinkTopic;
 
+    private static String taskId;
+    private static String operatorName;
+    //数据源参数
+    private static String redisUrl;
+    private static String redisPassword;
+    private static int redisDb;
+    private static String airHandlerRedisChannelKey;
+
+    private static int projectId;
+
+    //异常记录cube host
+    private static String cubeHost;
+    //异常记录cube的id
+    private static String cubeId;
+    private static List<String> sensorKeys;
+
+    //季节、温度参数
+    private static List<Integer> summer = new ArrayList<>(Arrays.asList(5, 6, 7, 8, 9, 10));
+    private static List<Integer> winter = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 11, 12));
+    private static double summerTem = 26;
+    private static double winterTem = 20;
+
+    //报警参数
+    private static String receiverJsonStr;
+    private static String templateId;
+    private static String warningHost;
 
     public static void Run(ExternalTask parameter) {
 
@@ -59,32 +76,17 @@ public class TemperatureAndSeasonOperator {
         env.setParallelism(1);
 
         //获取源
-        DataStream<JSONObject> sourceStream = SourceFunction.GetSource(env, kafkaServer, sourceTopic, sourceGroup, "time")
-                .filter(new CubeItemFilterInvalidFunction(logger));
-
-        //准备待计算源
-        DataStream<CubeItem> waitCalculateStream = sourceStream
-                .map(new MapFunction<JSONObject, CubeItem>() {
-                    @Override
-                    public CubeItem map(JSONObject jsonObject) throws Exception {
-                        return jsonObject.getJSONObject("value").toJavaObject(CubeItem.class);
-                    }
-                });
+        DataStream<AirHandlerCubeItem> waitCalculateStream = env
+                .addSource(new RedisSourceFunction(redisUrl, redisPassword, redisDb, airHandlerRedisChannelKey, projectId, logger))
+                .name(taskId + "airHandler-strategy-abnormal")
+                .flatMap(new AirHandlerSourceRedisMapFunction(logger, sensorKeys));
 
         //计算
-        DataStream<ResultItem> outputStream = waitCalculateStream
-                .map(new MapFunction<CubeItem, ResultItem>() {
-                    @Override
-                    public ResultItem map(CubeItem item) throws Exception {
-                        return TemperatureAndSeasonCalculator.Calculate(item);
-                    }
-                });
-
+        DataStream<StrategyAbnormalRecord> recordDataStream =
+                waitCalculateStream.flatMap(new TemperatureAndSeasonCalculator(summer, winter, summerTem, winterTem, operatorName));
         //报警
-        outputStream
-                .map(new PostMessage(parameter.Warning, logger));
-
-        Sink(outputStream);
+        recordDataStream.addSink(new RedisSinkFunction(redisUrl, redisPassword, redisDb, cubeId, projectId, logger));
+        recordDataStream.addSink(new TableSinkFunction(cubeHost, cubeId, String.valueOf(projectId), warningHost, receiverJsonStr, templateId, logger));
 
         try {
             env.execute("AirHandler-analysis-" + parameter.TaskId);
@@ -96,42 +98,28 @@ public class TemperatureAndSeasonOperator {
 
     private static void GetParameters(ExternalTask parameters) throws Exception {
         try {
-            kafkaServer = parameters.KafkaServer;
-            sourceTopic = "withoutWindow-" + parameters.Source;
-            sinkTopic = "AirHandler-analysis-" + parameters.TaskId;
-            sourceGroup = "AirHandler-analysis-" + parameters.TaskId;
-            TemperatureAndSeasonCalculator.SetSeason(
-                    parameters.OperatorParameter.getJSONArray("SummerMonth").toJavaList(int.class),
-                    parameters.OperatorParameter.getJSONArray("WinterMonth").toJavaList(int.class)
-            );
-            TemperatureAndSeasonCalculator.SetTemperature(
-                    parameters.OperatorParameter.getDouble("SummerTem"),
-                    parameters.OperatorParameter.getDouble("WinterTem")
-            );
+            taskId = parameters.TaskId;
+            redisUrl = System.getenv("REDIS");
+            redisPassword = System.getenv("REDIS_PASSWORD");
+            redisDb = parameters.OperatorParameter.getInteger("RedisDb");
+            airHandlerRedisChannelKey = parameters.OperatorParameter.getString("AirHandlerCubeId");
+            projectId = parameters.ProjectId;
+            cubeHost = System.getenv("WEB_URL");
+            cubeId = parameters.OperatorParameter.getString("CubeId");
 
+            sensorKeys = parameters.AirHandlerList.toJavaList(String.class);
+            operatorName = parameters.Operator.name();
+            receiverJsonStr = parameters.Warning.getJSONArray("Receivers").toJSONString();
+            templateId = parameters.Warning.getString("TemplateId");
+            warningHost = parameters.Warning.getString("Host");
+
+            summer = parameters.OperatorParameter.getJSONArray("SummerMonth").toJavaList(int.class);
+            winter = parameters.OperatorParameter.getJSONArray("WinterMonth").toJavaList(int.class);
+            summerTem = parameters.OperatorParameter.getDouble("SummerTem");
+            winterTem = parameters.OperatorParameter.getDouble("WinterTem");
         } catch (Exception e) {
             throw new Exception("获取数据源参数失败：" + e.getMessage());
         }
 
     }
-
-
-    private static void Sink(DataStream<ResultItem> dataStream) {
-        KafkaSink<String> kafkaSink = KafkaSink.<String>builder()
-                .setBootstrapServers(kafkaServer)
-                .setRecordSerializer(KafkaRecordSerializationSchema.builder()
-                        .setTopic(sinkTopic)
-                        .setValueSerializationSchema(new SimpleStringSchema())
-                        .build())
-                .setDeliverGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
-                .build();
-        dataStream.map(new MapFunction<ResultItem, String>() {
-            @Override
-            public String map(ResultItem windowedIllumination) throws Exception {
-                return JSON.toJSONString(windowedIllumination, SerializerFeature.PrettyFormat, SerializerFeature.WriteMapNullValue);
-            }
-        }).sinkTo(kafkaSink);
-
-    }
-
 }

@@ -19,7 +19,7 @@ public class SourceFunction {
                 .setBootstrapServers(kafkaServer)
                 .setTopics(topic)
                 .setGroupId(group)
-                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setStartingOffsets(OffsetsInitializer.latest())
                 .setValueOnlyDeserializer(new DeserializationSchema<JSONObject>() {
                     @Override
                     public JSONObject deserialize(byte[] bytes) throws IOException {

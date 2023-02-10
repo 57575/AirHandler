@@ -1,5 +1,6 @@
 package AirHandler.models;
 
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import AirHandler.enums.Operators;
 
@@ -10,10 +11,12 @@ import java.util.List;
  */
 public class ExternalTask {
     public String TaskId;
-    public String KafkaServer;
-    public String Source;
+    public int ProjectId;
     public long TimeStamp;
     public Operators Operator;
     public JSONObject OperatorParameter;
     public JSONObject Warning;
+    public JSONArray AirHandlerList;
+    public String FlinkId;
+    public String FlinkSecret;
 }
