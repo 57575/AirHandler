@@ -83,7 +83,7 @@ public class TemperatureAndSeasonOperator {
 
         //计算
         DataStream<StrategyAbnormalRecord> recordDataStream =
-                waitCalculateStream.flatMap(new TemperatureAndSeasonCalculator(summer, winter, summerTem, winterTem, operatorName));
+                waitCalculateStream.flatMap(new TemperatureAndSeasonCalculator(taskId, summer, winter, summerTem, winterTem, operatorName));
         //报警
         recordDataStream.addSink(new RedisSinkFunction(redisUrl, redisPassword, redisDb, cubeId, projectId, logger));
         recordDataStream.addSink(new TableSinkFunction(cubeHost, cubeId, String.valueOf(projectId), warningHost, receiverJsonStr, templateId, logger));

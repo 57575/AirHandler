@@ -11,6 +11,7 @@ import java.util.List;
 
 public class AirHandlerSourceRedisMapFunction implements FlatMapFunction<String, AirHandlerCubeItem> {
 
+    private static final long serialVersionUID = -6229876377150901970L;
     private org.slf4j.Logger log;
     private List<String> keys;
 

@@ -2,34 +2,67 @@ package AirHandler.operators;
 
 import AirHandler.enums.AirHandlerMode;
 import AirHandler.models.AirHandlerCubeItem;
-import AirHandler.models.ResultItem;
 import AirHandler.models.outputs.StrategyAbnormalRecord;
-import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.RichFlatMapFunction;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.util.Collector;
 
 import java.util.*;
 
-public class TemperatureAndSeasonCalculator implements FlatMapFunction<AirHandlerCubeItem, StrategyAbnormalRecord> {
+public class TemperatureAndSeasonCalculator extends RichFlatMapFunction<AirHandlerCubeItem, StrategyAbnormalRecord> implements CheckpointedFunction {
+    private static final long serialVersionUID = -7348932276816657783L;
     List<Integer> Summer;
     List<Integer> Winter;
     double SummerTem = 26;
     double WinterTem = 20;
     String OperatorName;
-    HashMap<String, StrategyAbnormalRecord> unfinishedRecords;
+    String taskId;
+    private transient ListState<StrategyAbnormalRecord> unfinishedRecordState;
+    Map<String, StrategyAbnormalRecord> unfinishedRecords;
 
-    public TemperatureAndSeasonCalculator(List<Integer> summer, List<Integer> winter, double summerTem, double winterTem, String operatorName) {
+    public TemperatureAndSeasonCalculator(String taskId, List<Integer> summer, List<Integer> winter, double summerTem, double winterTem, String operatorName) {
+        this.taskId = taskId;
         this.Summer = summer;
         this.Winter = winter;
         this.SummerTem = summerTem;
         this.WinterTem = winterTem;
         this.OperatorName = operatorName;
+        this.unfinishedRecords = new HashMap<>();
+    }
+
+    @Override
+    public void snapshotState(FunctionSnapshotContext context) throws Exception {
+        unfinishedRecordState.clear();
+        for (StrategyAbnormalRecord record : unfinishedRecords.values()) {
+            unfinishedRecordState.add(record);
+        }
+    }
+
+    @Override
+    public void initializeState(FunctionInitializationContext context) throws Exception {
+        ListStateDescriptor<StrategyAbnormalRecord> occMapState
+                = new ListStateDescriptor<StrategyAbnormalRecord>(
+                taskId + "unfinishedRecords",
+                TypeInformation.of(new TypeHint<StrategyAbnormalRecord>() {
+                })
+        );
+        unfinishedRecordState = context.getOperatorStateStore().getListState(occMapState);
+
+        if (context.isRestored()) {
+            for (StrategyAbnormalRecord record : unfinishedRecordState.get()) {
+                unfinishedRecords.put(record.SensorKey, record);
+            }
+        }
     }
 
     @Override
     public void flatMap(AirHandlerCubeItem item, Collector<StrategyAbnormalRecord> collector) throws Exception {
-        if (unfinishedRecords == null) {
-            unfinishedRecords = new HashMap<>();
-        }
         //尚未结束的事件
         boolean waitClose = unfinishedRecords.containsKey(item.DeviceKey);
         //该数据是否需要报警

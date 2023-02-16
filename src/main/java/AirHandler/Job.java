@@ -1,11 +1,7 @@
 package AirHandler;
 
-import AirHandler.enums.AirHandlerMode;
-import AirHandler.enums.Operators;
 import AirHandler.models.ExternalTask;
 import AirHandler.operators.TemperatureAndSeasonOperator;
-import AirHandler.utils.PostMessage;
-
 import com.alibaba.fastjson.JSONObject;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
@@ -14,7 +10,7 @@ public class Job {
     public static void main(String[] args) throws Exception {
         ExternalTask parameters = GetParameters(args);
         switch (parameters.Operator) {
-            case temperatureAndSeason:
+            case 温度设定异常:
                 TemperatureAndSeasonOperator.Run(parameters);
                 break;
             default:

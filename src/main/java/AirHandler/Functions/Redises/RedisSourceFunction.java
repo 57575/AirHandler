@@ -10,6 +10,7 @@ import java.util.Map;
 
 public class RedisSourceFunction extends RichSourceFunction<String> {
 
+    private static final long serialVersionUID = -1017078282786151388L;
     private final String redisUrl;
     private final String redisPassword;
     private final int redisDb;

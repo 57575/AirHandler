@@ -1,5 +1,5 @@
 package AirHandler.enums;
 
 public enum Operators {
-    temperatureAndSeason
+    温度设定异常
 }
